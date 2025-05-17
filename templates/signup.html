@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Sign Up</title>
+</head>
+<body>
+    <h2>Sign Up</h2>
+    <form method="POST" action="{{ url_for('signup') }}">
+      <div>
+        <label for="name">Full Name</label>
+        <input type="text" name="name" id="name" required />
+
+
+      </div>
+      <!-- existing email and password fields -->
+      <button type="submit">Sign Up</button>
+    </form>    
+    <p><a href="{{ url_for('login') }}">Already have an account? Login</a></p>
+    {% with messages = get_flashed_messages() %}
+      {% if messages %}
+        <ul style="color:red;">
+          {% for message in messages %}
+            <li>{{ message }}</li>
+          {% endfor %}
+        </ul>
+      {% endif %}
+    {% endwith %}
+</body>
+</html>
+

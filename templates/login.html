@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AI Honeypot - Login</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet" />
+  <style>
+    body {
+      background: #f6f7fb;
+      min-height: 100vh;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .main-card {
+      display: flex;
+      width: 900px;
+      max-width: 98vw;
+      min-height: 540px;
+      background: #fff;
+      border-radius: 32px;
+      box-shadow: 0 8px 40px 0 rgba(31, 38, 135, 0.13);
+      overflow: hidden;
+    }
+    .left-panel {
+      background: #6c63ff;
+      color: #fff;
+      flex: 1.1;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      justify-content: center;
+      padding: 3rem 2.5rem;
+      position: relative;
+    }
+    .left-panel h2 {
+      font-weight: 700;
+      margin-bottom: 1rem;
+    }
+    .left-panel p {
+      font-size: 1.1rem;
+      margin-bottom: 2.5rem;
+    }
+    .left-panel img {
+      width: 250px;
+      max-width: 100%;
+      margin-top: 2rem;
+      border-radius: 1.5rem;
+      box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.17);
+      opacity: 0.96;
+    }
+    .right-panel {
+      flex: 1.5;
+      background: rgba(255,255,255,0.85);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem 2.5rem;
+      position: relative;
+    }
+    .glass-form {
+      width: 100%;
+      max-width: 370px;
+      background: rgba(255,255,255,0.6);
+      border-radius: 24px;
+      padding: 2.5rem 2rem;
+      box-shadow: 0 4px 24px 0 rgba(31, 38, 135, 0.10);
+      backdrop-filter: blur(10px);
+    }
+    .glass-form input.form-control {
+      background: rgba(255,255,255,0.85);
+      border: none;
+      border-radius: 12px;
+      color: #222;
+      font-size: 1.05em;
+    }
+    .glass-form input.form-control:focus {
+      box-shadow: 0 0 0 2px #6c63ff33;
+      background: rgba(255,255,255,0.96);
+    }
+    .glass-form .btn-primary {
+      background: #6c63ff;
+      border: none;
+      border-radius: 12px;
+      font-weight: 600;
+      font-size: 1.08em;
+      transition: background 0.2s;
+    }
+    .glass-form .btn-primary:hover {
+      background: #5548d9;
+    }
+    .glass-form .form-check-label {
+      font-size: 0.96em;
+      color: #555;
+    }
+    .glass-form .form-text {
+      color: #888;
+      font-size: 0.96em;
+    }
+    .glass-form .form-link {
+      color: #6c63ff;
+      text-decoration: none;
+      font-weight: 500;
+    }
+    .glass-form .form-link:hover {
+      text-decoration: underline;
+    }
+    @media (max-width: 900px) {
+      .main-card {
+        flex-direction: column;
+        min-width: 320px;
+        min-height: 0;
+      }
+      .left-panel, .right-panel {
+        flex: none;
+        width: 100%;
+        min-height: 220px;
+        padding: 2rem 1.2rem;
+        justify-content: flex-start;
+      }
+      .left-panel img {
+        margin-top: 1rem;
+        width: 170px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="main-card mx-auto my-5">
+    <div class="left-panel">
+      <div>
+        <h2>Welcome Back</h2>
+        <p>
+          Securely access your AI Honeypot dashboard.<br>
+          Monitor, analyze, and respond to cyber threats with AI-powered insights.
+        </p>
+      </div>
+      <img src="https://assets-global.website-files.com/5e9aa66fd3886c3a2b4a3eab/6416f6e5c8e8c21b9a1b6d6f_cybersecurity-illustration.png" alt="AI Security Illustration" />
+    </div>
+    <div class="right-panel">
+      <form class="glass-form" method="POST" action="{{ url_for('login') }}">
+        <h4 class="mb-3 fw-bold">Log In</h4>
+        <div class="mb-3">
+          <label for="email" class="form-label">Email Address</label>
+          <input type="email" class="form-control" id="email" name="email" placeholder="Enter email" required />
+        </div>
+        <div class="mb-3">
+          <label for="password" class="form-label">Password</label>
+          <input type="password" class="form-control" id="password" name="password" placeholder="Password" required />
+        </div>
+        <div class="mb-3 form-check">
+          <input type="checkbox" class="form-check-input" id="remember" name="remember" />
+          <label class="form-check-label" for="remember">Remember me</label>
+        </div>
+        <button type="submit" class="btn btn-primary w-100 mb-2">Log In</button>
+        <div class="text-center mt-2">
+          <span class="form-text">Don't have an account? <a href="{{ url_for('signup') }}" class="form-link">Sign Up</a></span>
+        </div>
+        <div class="text-center mt-2">
+          <a href="{{ url_for('forgot_password') }}" class="form-link">Forgot Password?</a>
+        </div>
+      </form>
+    </div>
+  </div>
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

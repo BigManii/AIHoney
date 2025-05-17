@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Recent Attacks - AI Honeypot</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet" />
+</head>
+<body>
+  <div class="container mt-5">
+    <h2 class="mb-4">Recent Attacks</h2>
+    <div class="table-responsive">
+      <table class="table table-striped table-hover align-middle">
+        <thead class="table-dark">
+          <tr>
+            <th>IP Address</th>
+            <th>Attack Type</th>
+            <th>Timestamp</th>
+            <th>Details</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for attack in attacks %}
+          <tr>
+            <td>{{ attack.ip_address }}</td>
+            <td>{{ attack.attack_type }}</td>
+            <td>{{ attack.timestamp.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+            <td>{{ attack.details or 'N/A' }}</td>
+          </tr>
+          {% else %}
+          <tr>
+            <td colspan="4" class="text-center text-muted">No attacks recorded yet.</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <a href="{{ url_for('dashboard') }}" class="btn btn-secondary mt-3">Back to Dashboard</a>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
