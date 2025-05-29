@@ -54,6 +54,82 @@
         </div>
     </div>
 
+    <div class="row mt-4">
+        <div class="col-md-12">
+            <div class="card shadow-sm">
+                <div class="card-header bg-warning text-dark">
+                    Top Attack Types Chart
+                </div>
+                <div class="card-body">
+                    <canvas id="attackTypeChart"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <a href="{{ url_for('dashboard') }}" class="btn btn-secondary mt-5">Back to Dashboard</a>
 </div>
+
+<script>
+    // Get data passed from Flask (which are JSON strings, so parse them)
+    const topAttackLabels = JSON.parse('{{ top_attack_labels | safe }}');
+    const topAttackData = JSON.parse('{{ top_attack_data | safe }}');
+
+    // Get the canvas element
+    const ctx = document.getElementById('attackTypeChart').getContext('2d');
+
+    // Create the bar chart
+    new Chart(ctx, {
+        type: 'bar', // Type of chart
+        data: {
+            labels: topAttackLabels, // Attack type names
+            datasets: [{
+                label: 'Number of Attacks',
+                data: topAttackData, // Attack counts
+                backgroundColor: [ // Customize colors
+                    'rgba(255, 99, 132, 0.6)',
+                    'rgba(54, 162, 235, 0.6)',
+                    'rgba(255, 206, 86, 0.6)',
+                    'rgba(75, 192, 192, 0.6)',
+                    'rgba(153, 102, 255, 0.6)',
+                ],
+                borderColor: [ // Border colors
+                    'rgba(255, 99, 132, 1)',
+                    'rgba(54, 162, 235, 1)',
+                    'rgba(255, 206, 86, 1)',
+                    'rgba(75, 192, 192, 1)',
+                    'rgba(153, 102, 255, 1)',
+                ],
+                borderWidth: 1
+            }]
+        },
+        options: {
+            responsive: true,
+            scales: {
+                y: {
+                    beginAtZero: true,
+                    title: {
+                        display: true,
+                        text: 'Number of Attacks'
+                    }
+                },
+                x: {
+                    title: {
+                        display: true,
+                        text: 'Attack Type'
+                    }
+                }
+            },
+            plugins: {
+                legend: {
+                    display: false // No need for legend in a simple bar chart
+                },
+                title: {
+                    display: true,
+                    text: 'Distribution of Top Attack Types'
+                }
+            }
+        }
+    });
+</script>
 {% endblock %}

@@ -5,6 +5,7 @@
 
 # --- Python Standard Library ---
 import os
+import json
 from dotenv import load_dotenv
 import random
 import time
@@ -618,31 +619,33 @@ from sqlalchemy import func # Add this import at the top with other imports
 @app.route('/ai_panel')
 @login_required
 def ai_panel():
-    # 1. Fetch data: Get all attack logs
     attack_logs = Attack.query.all()
 
-    # 2. Analyze: Count occurrences of each attack type
+    # ... (your existing code to calculate attack_type_counts, sorted_attack_types, top_attack_types) ...
     attack_type_counts = {}
     for log in attack_logs:
         attack_type_counts[log.type] = attack_type_counts.get(log.type, 0) + 1
     
-    # 3. Sort and get top N (e.g., top 5)
-    # Convert dictionary to a list of (attack_type, count) tuples and sort by count (descending)
     sorted_attack_types = sorted(attack_type_counts.items(), key=lambda item: item[1], reverse=True)
-    top_attack_types = sorted_attack_types[:5] # Get the top 5
+    top_attack_types = sorted_attack_types[:5] 
 
-    # You could also add other simple insights here, e.g., count unique source IPs
     unique_ips = len(set(log.ip for log in attack_logs))
+    total_attacks = len(attack_logs)
+
+    # --- NEW: Prepare data for Chart.js ---
+    top_attack_labels = [item[0] for item in top_attack_types] # e.g., ['SQL Injection', 'Port Scan']
+    top_attack_data = [item[1] for item in top_attack_types]   # e.g., [15, 10]
 
 
-    # Pass the insights to the template
+    # Pass the insights (including chart data) to the template
     return render_template(
         'ai_panel.html',
-        top_attack_types=top_attack_types,
+        top_attack_types=top_attack_types, # Keep this for the list if you want both
         unique_ips=unique_ips,
-        total_attacks=len(attack_logs)
+        total_attacks=total_attacks,
+        top_attack_labels=json.dumps(top_attack_labels), # Pass as JSON string
+        top_attack_data=json.dumps(top_attack_data)     # Pass as JSON string
     )
-
 # ... (rest of your app.py) ...
 
 
