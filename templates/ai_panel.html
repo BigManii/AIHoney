@@ -69,7 +69,9 @@
 
     <a href="{{ url_for('dashboard') }}" class="btn btn-secondary mt-5">Back to Dashboard</a>
 </div>
+{% endblock %}
 
+{% block scripts %}
 <script>
     // Get data passed from Flask (which are JSON strings, so parse them)
     const topAttackLabels = JSON.parse('{{ top_attack_labels | safe }}');
