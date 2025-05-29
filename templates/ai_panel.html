@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+
+{% block title %}AI Insights Panel{% endblock %}
+
+{% block content %}
+<div class="container mt-5">
+    <h2 class="mb-4">AI Insights & Analytics</h2>
+    <hr>
+
+    <div class="row">
+        <div class="col-md-6 mb-4">
+            <div class="card shadow-sm">
+                <div class="card-header bg-primary text-white">
+                    Total Attacks
+                </div>
+                <div class="card-body">
+                    <h4 class="card-title">{{ total_attacks }}</h4>
+                    <p class="card-text">Total simulated attacks logged so far.</p>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-6 mb-4">
+            <div class="card shadow-sm">
+                <div class="card-header bg-success text-white">
+                    Unique Attacking IPs
+                </div>
+                <div class="card-body">
+                    <h4 class="card-title">{{ unique_ips }}</h4>
+                    <p class="card-text">Number of distinct source IP addresses.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row mt-4">
+        <div class="col-md-12">
+            <div class="card shadow-sm">
+                <div class="card-header bg-info text-white">
+                    Top 5 Most Frequent Attack Types
+                </div>
+                <ul class="list-group list-group-flush">
+                    {% if top_attack_types %}
+                        {% for attack_type, count in top_attack_types %}
+                            <li class="list-group-item d-flex justify-content-between align-items-center">
+                                {{ attack_type }}
+                                <span class="badge bg-secondary rounded-pill">{{ count }}</span>
+                            </li>
+                        {% endfor %}
+                    {% else %}
+                        <li class="list-group-item">No attack data to display yet.</li>
+                    {% endif %}
+                </ul>
+            </div>
+        </div>
+    </div>
+
+    <a href="{{ url_for('dashboard') }}" class="btn btn-secondary mt-5">Back to Dashboard</a>
+</div>
+{% endblock %}

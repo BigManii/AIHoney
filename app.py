@@ -608,6 +608,44 @@ def admin_panel():
     honeypots = Honeypot.query.all()
     return render_template('admin_panel.html', users=users, honeypots=honeypots)
 
+# app.py
+
+# ... (your existing imports, make sure 'db' and 'AttackLog' are imported) ...
+from sqlalchemy import func # Add this import at the top with other imports
+
+# ... (your existing app setup and other routes) ...
+
+@app.route('/ai_panel')
+@login_required
+def ai_panel():
+    # 1. Fetch data: Get all attack logs
+    attack_logs = Attack.query.all()
+
+    # 2. Analyze: Count occurrences of each attack type
+    attack_type_counts = {}
+    for log in attack_logs:
+        attack_type_counts[log.type] = attack_type_counts.get(log.type, 0) + 1
+    
+    # 3. Sort and get top N (e.g., top 5)
+    # Convert dictionary to a list of (attack_type, count) tuples and sort by count (descending)
+    sorted_attack_types = sorted(attack_type_counts.items(), key=lambda item: item[1], reverse=True)
+    top_attack_types = sorted_attack_types[:5] # Get the top 5
+
+    # You could also add other simple insights here, e.g., count unique source IPs
+    unique_ips = len(set(log.ip for log in attack_logs))
+
+
+    # Pass the insights to the template
+    return render_template(
+        'ai_panel.html',
+        top_attack_types=top_attack_types,
+        unique_ips=unique_ips,
+        total_attacks=len(attack_logs)
+    )
+
+# ... (rest of your app.py) ...
+
+
 @app.route('/confirm/<token>')
 def confirm_email(token):
     s = get_serializer()

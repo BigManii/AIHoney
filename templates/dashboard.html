@@ -14,7 +14,7 @@
                 <li><a href="#">⚠️ Threats</a></li>     {# Placeholder, link to threat intel page #}
                 <li><a href="#">⚙️ Settings</a></li>   {# Placeholder, link to settings page #}
                 {% if current_user.role == 'master' %}
-                <li><a href="{{ url_for('admin_panel') }}">🛠️ Admin Panel</a></li>
+                <li><a href="{{ url_for('ai_panel') }}" class="btn btn-info">AI Insights Panel</a></li>
                 {% endif %}
                 <li><a href="{{ url_for('logout') }}">➡️ Logout</a></li>
             </ul>
