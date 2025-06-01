@@ -5,6 +5,8 @@
 
 # --- Python Standard Library ---
 import os
+import re
+import traceback
 import json
 from dotenv import load_dotenv
 import random
@@ -278,34 +280,39 @@ def extract_features(attack_data):
     """
     payload = attack_data.get('payload', '')
     scanned_path = attack_data.get('scanned_path', '')
-    timestamp_str = attack_data.get('timestamp', datetime.utcnow().isoformat())
+    timestamp_input = attack_data.get('timestamp') # Get the timestamp input, can be None or string
     
-    try:
-        # Assuming timestamp is in ISO format or similar, convert to datetime object
-        if isinstance(timestamp_str, str):
-            dt_object = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00')) # Handle 'Z' for UTC
-        else:
-            dt_object = timestamp_str # Assume it's already a datetime object
-    except ValueError:
-        dt_object = datetime.utcnow() # Fallback to current UTC time if parsing fails
+    dt_object = None
+    if isinstance(timestamp_input, str):
+        try:
+            # Try to parse the string timestamp
+            dt_object = datetime.fromisoformat(timestamp_input.replace('Z', '+00:00')) # Handle 'Z' for UTC
+        except ValueError:
+            # Fallback to current UTC time if string is invalid ISO format
+            dt_object = datetime.utcnow()
+    elif timestamp_input is None:
+        # If timestamp is not provided, use current UTC time
+        dt_object = datetime.utcnow()
+    else:
+        # If it's not a string and not None, assume it's already a datetime object or fall back
+        # For simplicity, we'll just use current UTC time as a fallback for unexpected types
+        dt_object = datetime.utcnow()
+
+    # Ensure dt_object is not None before proceeding
+    if dt_object is None:
+        # This case should ideally not happen with the above logic, but as a safeguard
+        dt_object = datetime.utcnow()
 
     # Feature 1: request_path_length
-    # Combine scanned_path and payload for a more comprehensive length feature
     full_request_content = f"{scanned_path} {payload}"
-    request_path_length = len(full_request_content) if full_request_content else 0
+    request_path_length = len(full_request_content.strip()) if full_request_content.strip() else 0
 
-    # Feature 2: http_method_encoded (Assuming method can be derived from payload/type)
-    # This is a simplification; a real web honeypot would get method directly from HTTP request.
-    # For now, we'll use a placeholder or derive from attack_data.type if applicable.
-    # Let's assume for now, it's always 0 (GET) as we don't have explicit method in `log_attack` payload yet.
-    # We will refine this later if the payload structure changes to include HTTP method.
-    http_method_map = {'GET': 0, 'POST': 1, 'PUT': 2, 'DELETE': 3, 'HEAD': 4, 'OPTIONS': 5}
-    http_method_encoded = http_method_map.get(attack_data.get('method', '').upper(), -1) # -1 for unknown
-
+    # Feature 2: http_method_encoded
+    http_method_map = {'GET': 0, 'POST': 1, 'PUT': 2, 'DELETE': 3, 'HEAD': 4, 'OPTIONS': 5, 'UNKNOWN': -1}
+    http_method_encoded = http_method_map.get(attack_data.get('method', 'UNKNOWN').upper(), -1)
 
     # Feature 3, 4, 5: Pattern matching for common attack types
-    # Simple keyword checks in payload or scanned_path
-    content_to_scan = (payload if isinstance(payload, str) else json.dumps(payload)) + " " + scanned_path if scanned_path else ""
+    content_to_scan = (payload if isinstance(payload, str) else json.dumps(payload) if payload else "") + " " + (scanned_path if scanned_path else "")
     content_to_scan = content_to_scan.lower()
 
     is_sql_injection_pattern = bool(
@@ -334,8 +341,6 @@ def extract_features(attack_data):
         'day_of_week': day_of_week,
     }
 
-# Make sure to add 're' to your imports at the top of app.py
-# import re
 
         
 
@@ -765,178 +770,166 @@ def test_post_route():
 # ==============================================================================
 # ATTACK LOGGING ROUTE (Honeypot Interaction Point)
 # ==============================================================================
+
 @app.route('/log_attack', methods=['POST'])
-# @api_key_required # <--- KEEP THIS COMMENTED OUT for now if not implemented
-# @limiter.exempt   # <--- THIS IS NOW COMMENTED OUT
+@limiter.limit("100 per minute") # Rate limit this endpoint
 def log_attack():
-    print("DEBUG: Entered log_attack function.")
-    global anomaly_detector, rl_agent
     data = request.get_json()
-    print(f"DEBUG: RAW Received attack data in log_attack: {data}")
-    if not data:
-        print("DEBUG: No JSON data received.")
-        return jsonify({"error": "No JSON data received"}), 400
 
-    source_ip = data.get('ip_address') or data.get('ip')
-    attack_type = data.get('type') or data.get('attack_type')
-    payload = data.get('payload') or data.get('details')
+    # --- START OF CRITICAL CHECKS ---
+    # These checks must be at the top-level of the function
+    if not isinstance(data, dict):
+        print(f"DEBUG: log_attack received data of unexpected type: {type(data)}. Full data: {data}")
+        return jsonify({"error": "Invalid JSON payload or unexpected data type. Expected a dictionary."}), 400
+    
+    if not data: # This check is for an empty dictionary after validation
+        return jsonify({"error": "Empty JSON payload provided"}), 400
+    # --- END OF CRITICAL CHECKS ---
+
+    # Required fields for Attack model
+    ip_address = data.get('ip_address') or request.remote_addr # Use provided or remote IP
+    attack_type = data.get('type')
+    payload = data.get('payload')
     honeypot_name = data.get('honeypot_name')
-    honeypot_type = data.get('honeypot_type', 'Unknown')
-    user_agent = request.headers.get('User-Agent', 'Unknown')
-    timestamp_str = data.get('timestamp')
+    honeypot_type = data.get('honeypot_type')
+    api_key = data.get('api_key')
+    timestamp = data.get('timestamp') # Expecting ISO format string
+    user_agent = data.get('user_agent')
+    scanned_path = data.get('scanned_path')
+    method = data.get('method', 'UNKNOWN') # Assuming method might come from payload now
 
-    print(f"DEBUG: Parsed data - IP: {source_ip}, Type: {attack_type}, Honeypot: {honeypot_name}")
+    if not all([attack_type, payload, honeypot_name, honeypot_type, api_key]):
+        return jsonify({"error": "Missing required attack data fields"}), 400
 
-    if not source_ip or not attack_type:
-        print(f"DEBUG: Missing critical data. IP: {source_ip}, Type: {attack_type}")
-        return jsonify({"error": "Missing IP address or attack type"}), 400
+    # --- API Key Authentication ---
+    expected_api_key = current_app.config['HONEYPOT_API_KEYS'].get(honeypot_name)
+    if not expected_api_key or expected_api_key != api_key:
+        print(f"DEBUG: Unauthorized access attempt to {honeypot_name} with key {api_key}")
+        return jsonify({"error": "Unauthorized honeypot access"}), 401
 
-    timestamp = datetime.now(timezone.utc) # Default timestamp if none provided or parsing fails
-    if timestamp_str:
-        try:
-            # datetime.fromisoformat handles 'Z' and standard timezone offsets directly.
-            timestamp = datetime.fromisoformat(timestamp_str)
-
-            # Ensure the timestamp is timezone-aware and converted to UTC
-            if timestamp.tzinfo is None:
-                # If naive, assume it's UTC if it came with 'Z' (which fromisoformat would handle)
-                # or treat it as local time and convert to UTC.
-                # For consistency with Z suffix, we assume it's UTC if naive at this point.
-                timestamp = timestamp.replace(tzinfo=timezone.utc)
-            else:
-                # If already timezone-aware, convert to UTC
-                timestamp = timestamp.astimezone(timezone.utc)
-
-        except ValueError as e:
-            print(f"DEBUG: Invalid timestamp format: {timestamp_str} - Error: {e}")
-            return jsonify({"error": "Invalid timestamp format. Use ISO format (YYYY-MM-DDTHH:MM:SSZ)"}), 400
-
-    if is_ip_blocked(source_ip):
-        print(f"Blocked attack from {source_ip} (already blocked).")
-        return jsonify({"status": "blocked", "message": "IP is currently blocked."}), 403
-
-    country, city, latitude, longitude = get_geolocation_data(source_ip)
-    threat_intel_result = check_ip_reputation(source_ip)
-    is_threat = threat_intel_result.get('is_malicious', False)
-
-    # Ensure payload is a string for len()
-    payload_len = len(str(payload)) if payload is not None else 0
-
-    anomaly_input_features = np.array([
-        payload_len,
-        1 if 'login' in attack_type.lower() else 0,
-        1 if 'sql' in attack_type.lower() else 0,
-        threat_intel_result.get('score', 0),
-        1 if country == 'China' else 0, # Example feature
-        random.random(), # Placeholder features
-        random.random(),
-        random.random(),
-        random.random()
-    ]).reshape(1, -1)
-
-    is_anomaly = False
-    if anomaly_detector.model:
-        is_anomaly = bool(anomaly_detector.predict(anomaly_input_features)[0])
-
-    # Get the API key for the honeypot
-    honeypot_api_key = current_app.config['HONEYPOT_API_KEYS'].get(honeypot_name)
-    if not honeypot_api_key:
-        return jsonify({"error": f"API key not configured for honeypot: {honeypot_name}"}), 400
-
-    honeypot = Honeypot.query.filter_by(name=honeypot_name).first()
-    if not honeypot:
-        # Create new honeypot if it doesn't exist
-        honeypot = Honeypot(
-            name=honeypot_name,
-            type=honeypot_type,
-            status="Active",
-            last_seen=timestamp, # Corrected from last_activity
-            api_key=honeypot_api_key # Added for NOT NULL constraint
-        )
-        db.session.add(honeypot)
-        print(f"Created new honeypot: {honeypot.name} with type {honeypot.type}")
-    else:
-        # Update existing honeypot
-        # Removed honeypot.events += 1 as 'events' column is not used; attack_count property tracks attacks
-        honeypot.status = "Active"
-        honeypot.last_seen = timestamp # Corrected from last_activity
-        if honeypot.type == 'Unknown' and honeypot_type != 'Unknown':
-            honeypot.type = honeypot_type
-    db.session.commit() # Commit the new/updated honeypot
-
-    new_attack = Attack(
-    ip=source_ip,
-    timestamp=timestamp,
-    type=attack_type, # <--- CORRECTED!
-    payload=str(payload),
-    honeypot_id=honeypot.id,
-    is_threat=is_threat,
-    is_anomaly=is_anomaly,
-    user_agent=user_agent,
-    country=country,
-    city=city,
-    latitude=latitude,
-    longitude=longitude,
-    threat_intel=threat_intel_result
-)
-    db.session.add(new_attack)
-    db.session.commit() # Commit the new attack record
-
-    # Now that the attack is committed, honeypot.attack_count will reflect it
-    print(f"Logged attack: {attack_type} on {honeypot_name} (Attacks: {honeypot.attack_count}) from {source_ip}") # Used attack_count
-
-    # Emit new attack data via SocketIO
-    socketio.emit('new_attack', {
-        'id': new_attack.id,
-        'ip': source_ip,
-        'type': attack_type,
-        'timestamp': new_attack.timestamp.isoformat(),
-        'user_agent': user_agent,
-        'payload': str(payload),
+    # --- Geolocation and IP Reputation ---
+    # get_geolocation_data now returns a tuple (country, city, lat, lon)
+    country, city, latitude, longitude = get_geolocation_data(ip_address)
+    geolocation_data = {
         'country': country,
         'city': city,
         'latitude': latitude,
-        'longitude': longitude,
-        'is_threat': is_threat,
-        'is_anomaly': is_anomaly,
-        'honeypot_id': honeypot.id
-    }, namespace='/')
+        'longitude': longitude
+    }
+    ip_reputation_data = check_ip_reputation(ip_address)
+    
+    # Check for honeypot_id (This part assumes a Honeypot model exists and is related)
+    honeypot_instance = Honeypot.query.filter_by(name=honeypot_name).first()
+    honeypot_id = None
+    if honeypot_instance:
+        honeypot_id = honeypot_instance.id
+    else:
+        # If honeypot doesn't exist, create it (example from previous logic)
+        new_honeypot = Honeypot(name=honeypot_name, honeypot_type=honeypot_type, api_key=api_key)
+        db.session.add(new_honeypot)
+        db.session.commit()
+        honeypot_id = new_honeypot.id
+        print(f"DEBUG: Created new honeypot instance: {honeypot_name}")
 
-    # RL Agent state update and action decision (conceptual, adjust as needed)
-    current_state_rl = np.array([
-        1 if is_ip_blocked(source_ip) else 0,
-        is_threat,
-        is_anomaly,
-        honeypot.attack_count, # Used attack_count
-        len(Attack.query.filter_by(ip=source_ip).all()), # Total attacks from this specific IP
-        1 if 'login' in attack_type.lower() else 0, # Simplified feature example
-        1 if 'sql' in attack_type.lower() else 0,   # Simplified feature example
-        random.random(), # More placeholder features
-        random.random()
-    ]).reshape(1, -1)
 
-    # Simplified reward based on detection/threat (adjust logic as needed)
-    reward = 10 if is_threat or is_anomaly else 1
-    action = rl_agent.act(current_state_rl)
-    next_state_rl = current_state_rl # For simplicity, next state could be derived from new attack data
-    rl_agent.remember(current_state_rl, action, reward, next_state_rl, False) # 'done' usually means episode end
-    rl_agent.replay(batch_size=32)
+    # --- ML Feature Extraction ---
+    # Prepare data for feature extraction using the `data` from the request
+    features = extract_features({
+        'payload': payload,
+        'scanned_path': scanned_path,
+        'timestamp': timestamp,
+        'type': attack_type,
+        'method': method
+    })
 
-    action_taken = "log_only" # Default action
-    if action == 0:
+    # --- Threat Detection and Action Logic ---
+    action_taken = "log_only"
+    threat_level = "low"
+    is_threat = False
+    is_anomaly = False # Placeholder for anomaly detection
+
+    # Initial simple AI/ML prediction (placeholder for now)
+    if attack_type in ["SQL Injection", "XSS", "Directory Traversal", "Malware Upload"]:
+        is_threat = True
+        threat_level = "high"
+        
+        # Anomaly Detection Placeholder (requires numpy imported and IsolationForest setup)
+        # Assuming app.extensions['anomaly_detector'] is initialized
+        if 'anomaly_detector' in current_app.extensions and current_app.extensions['anomaly_detector'].is_initialized:
+            # Create a 2D array for the single sample
+            dummy_features_for_anomaly = np.array([
+                features['request_path_length'],
+                features['http_method_encoded'],
+                1 if features['is_sql_injection_pattern'] else 0, # Convert bool to int
+                1 if features['is_xss_pattern'] else 0,          # Convert bool to int
+                1 if features['is_dir_trav_pattern'] else 0,     # Convert bool to int
+                features['hour_of_day'],
+                features['day_of_week']
+            ]).reshape(1, -1) # Reshape for a single sample with multiple features
+            
+            # Predict using the anomaly detector
+            is_anomaly = current_app.extensions['anomaly_detector'].predict(dummy_features_for_anomaly)[0] == -1 # IsolationForest returns -1 for anomaly, 1 for normal
+
+            if is_anomaly:
+                print(f"DEBUG: Anomaly detected for IP: {ip_address}")
+                action_taken = "trigger_alert"
+                threat_level = "critical"
+            else:
+                action_taken = "log_only"
+                threat_level = "medium"
+        else:
+            action_taken = "log_only"
+            threat_level = "medium"
+
+    # --- IP Blocking Logic ---
+    if is_ip_blocked(ip_address):
+        print(f"DEBUG: Attack from known blocked IP: {ip_address}. Logging only.")
         action_taken = "block_ip"
-        block_ip(source_ip)
-    elif action == 1:
-        action_taken = "trigger_alert"
-        # TODO: Implement alert triggering mechanism
-    elif action == 2:
-        action_taken = "redirect_attacker"
-        # TODO: Implement attacker redirection mechanism
-    # Additional actions can be defined
+        threat_level = "critical"
 
-    print(f"DEBUG: RL agent took action: {action_taken}") # Debugging print
 
-    message = ""
+    # Create new Attack entry with all new features
+    new_attack = Attack(
+        ip=ip_address,
+        type=attack_type,
+        payload=payload,
+        user_agent=user_agent,
+        scanned_path=scanned_path,
+        timestamp=datetime.fromisoformat(timestamp.replace('Z', '+00:00')) if isinstance(timestamp, str) else datetime.utcnow(),
+        latitude=geolocation_data.get('latitude'),
+        longitude=geolocation_data.get('longitude'),
+        country=geolocation_data.get('country'),
+        city=geolocation_data.get('city'),
+        honeypot_id=honeypot_id,
+        is_threat=is_threat,
+        is_anomaly=is_anomaly,
+        threat_intel=ip_reputation_data,
+        # Assign new ML features
+        request_path_length=features['request_path_length'],
+        http_method_encoded=features['http_method_encoded'],
+        is_sql_injection_pattern=features['is_sql_injection_pattern'],
+        is_xss_pattern=features['is_xss_pattern'],
+        is_dir_trav_pattern=features['is_dir_trav_pattern'],
+        hour_of_day=features['hour_of_day'],
+        day_of_week=features['day_of_week']
+    )
+    db.session.add(new_attack)
+    db.session.commit()
+
+    # Emit real-time update
+    attack_data_for_feed = {
+        "ip_address": ip_address,
+        "type": attack_type,
+        "timestamp": new_attack.timestamp.isoformat(),
+        "honeypot_name": honeypot_name,
+        "threat_level": threat_level,
+        "action_taken": action_taken,
+        "city": geolocation_data.get('city', 'N/A'),
+        "country": geolocation_data.get('country', 'N/A')
+    }
+    socketio.emit('new_attack', attack_data_for_feed)
+
+    # Final response
     if action_taken == "block_ip":
         message = "Attack source blocked due to AI analysis."
     elif action_taken == "trigger_alert":
