@@ -58,9 +58,20 @@ from flask_mail import Message # Keep Message import if you use it directly
 
 app = Flask(__name__)
 
+# --- Start of Database Configuration Update ---
+
+# Ensure the instance directory exists using Flask's built-in app.instance_path.
+# For a Flask app created at the root of your project, app.instance_path will
+# automatically resolve to a subdirectory named 'instance' next to your app.py.
+os.makedirs(app.instance_path, mode=0o755, exist_ok=True)
+print(f"DEBUG: Created database directory: {app.instance_path}")
+
+# Construct the absolute path to your database file within the instance directory.
+db_path = os.path.join(app.instance_path, 'honeypot.db')
+
 # App Configuration
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', '@EmmanuelogboguKey64')
-app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', 'sqlite:///new_honeypot.db')
+app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', f'sqlite:///{db_path}')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SESSION_COOKIE_SECURE'] = False
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
@@ -100,9 +111,11 @@ from models import User, Attack, Honeypot
 def load_user(user_id):
     return User.query.get(int(user_id))
 
+
 # Create database tables within an application context (for initial setup)
-with app.app_context():
-    db.create_all() # Temporarily add this back to ensure tables exist
+# This block should be at the GLOBAL SCOPE (no indentation)
+with app.app_context(): # <--- This line should have NO INDENTATION
+    # db.create_all() # Commented out, migrations will handle schema creation
     print(f"DEBUG: Flask app is connecting to database: {app.config['SQLALCHEMY_DATABASE_URI']}")
     pass
 
@@ -250,6 +263,81 @@ def get_geolocation_data(ip_address):
     except Exception as e:
         current_logger.error(f"An unexpected error occurred during geo-location lookup for {ip_address}: {e}")
         return None, None, None, None
+
+# app.py
+
+# ... (existing imports, app setup, db setup, etc.) ...
+
+# ==============================================================================
+# ML FEATURE EXTRACTION HELPERS
+# ==============================================================================
+
+def extract_features(attack_data):
+    """
+    Extracts defined features from attack data.
+    """
+    payload = attack_data.get('payload', '')
+    scanned_path = attack_data.get('scanned_path', '')
+    timestamp_str = attack_data.get('timestamp', datetime.utcnow().isoformat())
+    
+    try:
+        # Assuming timestamp is in ISO format or similar, convert to datetime object
+        if isinstance(timestamp_str, str):
+            dt_object = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00')) # Handle 'Z' for UTC
+        else:
+            dt_object = timestamp_str # Assume it's already a datetime object
+    except ValueError:
+        dt_object = datetime.utcnow() # Fallback to current UTC time if parsing fails
+
+    # Feature 1: request_path_length
+    # Combine scanned_path and payload for a more comprehensive length feature
+    full_request_content = f"{scanned_path} {payload}"
+    request_path_length = len(full_request_content) if full_request_content else 0
+
+    # Feature 2: http_method_encoded (Assuming method can be derived from payload/type)
+    # This is a simplification; a real web honeypot would get method directly from HTTP request.
+    # For now, we'll use a placeholder or derive from attack_data.type if applicable.
+    # Let's assume for now, it's always 0 (GET) as we don't have explicit method in `log_attack` payload yet.
+    # We will refine this later if the payload structure changes to include HTTP method.
+    http_method_map = {'GET': 0, 'POST': 1, 'PUT': 2, 'DELETE': 3, 'HEAD': 4, 'OPTIONS': 5}
+    http_method_encoded = http_method_map.get(attack_data.get('method', '').upper(), -1) # -1 for unknown
+
+
+    # Feature 3, 4, 5: Pattern matching for common attack types
+    # Simple keyword checks in payload or scanned_path
+    content_to_scan = (payload if isinstance(payload, str) else json.dumps(payload)) + " " + scanned_path if scanned_path else ""
+    content_to_scan = content_to_scan.lower()
+
+    is_sql_injection_pattern = bool(
+        re.search(r"select.*from|union.*select|' or '1'='1|--|#|cast\(|convert\(", content_to_scan)
+    )
+    is_xss_pattern = bool(
+        re.search(r"<script>|alert\(|onerror|onload|javascript:|eval\(", content_to_scan)
+    )
+    is_dir_trav_pattern = bool(
+        re.search(r"\.\./|\.\.\\|%2e%2e%2f|%2e%2e%5c", content_to_scan)
+    )
+
+    # Feature 6: hour_of_day
+    hour_of_day = dt_object.hour
+
+    # Feature 7: day_of_week (Monday=0, Sunday=6)
+    day_of_week = dt_object.weekday()
+
+    return {
+        'request_path_length': request_path_length,
+        'http_method_encoded': http_method_encoded,
+        'is_sql_injection_pattern': is_sql_injection_pattern,
+        'is_xss_pattern': is_xss_pattern,
+        'is_dir_trav_pattern': is_dir_trav_pattern,
+        'hour_of_day': hour_of_day,
+        'day_of_week': day_of_week,
+    }
+
+# Make sure to add 're' to your imports at the top of app.py
+# import re
+
+        
 
 # ==============================================================================
 # IP BLOCKING MECHANISM

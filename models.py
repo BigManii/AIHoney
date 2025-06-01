@@ -83,5 +83,16 @@ class Attack(db.Model):
     is_anomaly = db.Column(db.Boolean, nullable=False, server_default='0') # Set server_default
     threat_intel = db.Column(db.JSON, nullable=True) # <--- ADD THIS LINE HERE
 
+     # --- ADD THESE NEW COLUMNS FOR ML FEATURE EXTRACTION ---
+    request_path_length = db.Column(db.Integer, nullable=True)
+    http_method_encoded = db.Column(db.Integer, nullable=True) # e.g., 0 for GET, 1 for POST
+    is_sql_injection_pattern = db.Column(db.Boolean, default=False, nullable=True)
+    is_xss_pattern = db.Column(db.Boolean, default=False, nullable=True)
+    is_dir_trav_pattern = db.Column(db.Boolean, default=False, nullable=True)
+    hour_of_day = db.Column(db.Integer, nullable=True)
+    day_of_week = db.Column(db.Integer, nullable=True)
+    # --- END OF NEW COLUMNS ---
+
+
     def __repr__(self):
         return f'<Attack from {self.ip} at {self.timestamp}>'
