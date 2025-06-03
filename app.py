@@ -46,6 +46,8 @@ from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import Dense
 from tensorflow.keras.optimizers import Adam
 
+from models import User, Attack, Honeypot
+
 # Load environment variables
 load_dotenv()
 
@@ -103,23 +105,248 @@ init_extensions(app)
 migrate = Migrate(app, db)
 
 # ==============================================================================
+# REINFORCEMENT LEARNING AGENT (AI)
+# ==============================================================================
+class HoneypotRLAgent:
+    def __init__(self, state_size, action_size):
+        self.state_size = state_size
+        self.action_size = action_size
+        self.memory = deque(maxlen=2000)
+        self.gamma = 0.95
+        self.epsilon = 1.0
+        self.epsilon_decay = 0.995
+        self.epsilon_min = 0.01
+        self.learning_rate = 0.001
+        self.model = self._build_model()
+
+    def _build_model(self):
+        model = Sequential()
+        model.add(Dense(24, input_dim=self.state_size, activation='relu'))
+        model.add(Dense(24, activation='relu'))
+        model.add(Dense(self.action_size, activation='linear'))
+        model.compile(loss='mse', optimizer=Adam(learning_rate=self.learning_rate))
+        return model
+
+    def remember(self, state, action, reward, next_state, done):
+        self.memory.append((state, action, reward, next_state, done))
+
+    def act(self, state):
+        if np.random.rand() <= self.epsilon:
+            return random.randrange(self.action_size)
+        act_values = self.model.predict(state, verbose=0)
+        return np.argmax(act_values[0])
+
+    def replay(self, batch_size):
+        if len(self.memory) < batch_size:
+            return
+        minibatch = random.sample(self.memory, batch_size)
+        for state, action, reward, next_state, done in minibatch:
+            target = reward
+            if not done:
+                target = (reward + self.gamma * np.amax(self.model.predict(next_state, verbose=0)[0]))
+            target_f = self.model.predict(state, verbose=0)
+            target_f[0][action] = target
+            self.model.fit(state, target_f, epochs=1, verbose=0)
+        if self.epsilon > self.epsilon_min:
+            self.epsilon *= self.epsilon_decay
+
+    def save_model(self, path):
+        self.model.save(path)
+
+    def load_model(self, path):
+        self.model = tf.keras.models.load_model(path)
+
+# ==============================================================================
+# ANOMALY DETECTION (AI)
+# ==============================================================================
+class AnomalyDetector:
+    def __init__(self):
+        self.model = None
+        self.threshold = 0.5
+        self.is_initialized = False # <--- ADD THIS LINE
+
+    def train(self, data):
+        if data.shape[0] < 2: # Ensure at least 2 samples for IsolationForest
+            print("WARNING: Not enough data to train Anomaly Detector. Need at least 2 samples.")
+            self.is_initialized = False
+            return
+        self.model = IsolationForest(random_state=42)
+        self.model.fit(data)
+        self.is_initialized = True # <--- SET TO TRUE ON SUCCESSFUL TRAINING
+        print("Anomaly Detector trained successfully.")
+
+    def predict(self, data):
+        if self.model and self.is_initialized:
+            scores = self.model.decision_function(data)
+            return scores < self.threshold # Returns True for anomaly, False for normal
+        print("WARNING: Anomaly Detector not trained. Returning False for all predictions.")
+        return np.array([False] * len(data))
+
+    def save_model(self, path):
+        if self.model: # Only save if a model exists
+            joblib.dump(self.model, path)
+            print(f"Anomaly Detector model saved to {path}")
+
+    def load_model(self, path):
+        try:
+            self.model = joblib.load(path)
+            self.is_initialized = True # Set to True if successfully loaded
+            print(f"Anomaly Detector model loaded from {path}")
+        except FileNotFoundError:
+            print(f"Anomaly Detector model not found at {path}. Will train on startup.")
+            self.is_initialized = False
+        except Exception as e:
+            print(f"Error loading Anomaly Detector model from {path}: {e}")
+            self.is_initialized = False
+
+# Global instances for AI models (initialized lazily)
+rl_agent = DQLAgent(state_size=9, action_size=3) #
+anomaly_detector = AnomalyDetector() # This line should be present
+
+# ==============================================================================
+# ML FEATURE EXTRACTION HELPERS
+# ==============================================================================
+
+def extract_features(attack_data):
+    """
+    Extracts defined features from attack data.
+    """
+    payload = attack_data.get('payload', '')
+    scanned_path = attack_data.get('scanned_path', '')
+    timestamp_input = attack_data.get('timestamp') # Get the timestamp input, can be None or string
+    
+    dt_object = None
+    if isinstance(timestamp_input, str):
+        try:
+            # Try to parse the string timestamp
+            dt_object = datetime.fromisoformat(timestamp_input.replace('Z', '+00:00')) # Handle 'Z' for UTC
+        except ValueError:
+            # Fallback to current UTC time if string is invalid ISO format
+            dt_object = datetime.utcnow()
+    elif timestamp_input is None:
+        # If timestamp is not provided, use current UTC time
+        dt_object = datetime.utcnow()
+    else:
+        # If it's not a string and not None, assume it's already a datetime object or fall back
+        # For simplicity, we'll just use current UTC time as a fallback for unexpected types
+        dt_object = datetime.utcnow()
+
+    # Ensure dt_object is not None before proceeding
+    if dt_object is None:
+        # This case should ideally not happen with the above logic, but as a safeguard
+        dt_object = datetime.utcnow()
+
+    # Feature 1: request_path_length
+    full_request_content = f"{scanned_path} {payload}"
+    request_path_length = len(full_request_content.strip()) if full_request_content.strip() else 0
+
+    # Feature 2: http_method_encoded
+    http_method_map = {'GET': 0, 'POST': 1, 'PUT': 2, 'DELETE': 3, 'HEAD': 4, 'OPTIONS': 5, 'UNKNOWN': -1}
+    http_method_encoded = http_method_map.get(attack_data.get('method', 'UNKNOWN').upper(), -1)
+
+    # Feature 3, 4, 5: Pattern matching for common attack types
+    content_to_scan = (payload if isinstance(payload, str) else json.dumps(payload) if payload else "") + " " + (scanned_path if scanned_path else "")
+    content_to_scan = content_to_scan.lower()
+
+    is_sql_injection_pattern = bool(
+        re.search(r"select.*from|union.*select|' or '1'='1|--|#|cast\(|convert\(", content_to_scan)
+    )
+    is_xss_pattern = bool(
+        re.search(r"<script>|alert\(|onerror|onload|javascript:|eval\(", content_to_scan)
+    )
+    is_dir_trav_pattern = bool(
+        re.search(r"\.\./|\.\.\\|%2e%2e%2f|%2e%2e%5c", content_to_scan)
+    )
+
+    # Feature 6: hour_of_day
+    hour_of_day = dt_object.hour
+
+    # Feature 7: day_of_week (Monday=0, Sunday=6)
+    day_of_week = dt_object.weekday()
+
+    return {
+        'request_path_length': request_path_length,
+        'http_method_encoded': http_method_encoded,
+        'is_sql_injection_pattern': is_sql_injection_pattern,
+        'is_xss_pattern': is_xss_pattern,
+        'is_dir_trav_pattern': is_dir_trav_pattern,
+        'hour_of_day': hour_of_day,
+        'day_of_week': day_of_week,
+    }
+
+#====APPLICATION CONTEXT BLOCK======
+with app.app_context():
+    # db.create_all() # Commented out, migrations will handle schema creation
+    print(f"DEBUG: Flask app is connecting to database: {app.config['SQLALCHEMY_DATABASE_URI']}")
+
+    # --- Anomaly Detector Initialization & Training ---
+    # Store anomaly_detector instance on app.extensions for access later
+    if 'anomaly_detector' not in app.extensions:
+        app.extensions['anomaly_detector'] = anomaly_detector # Use the global instance
+        app.extensions['anomaly_detector'].is_initialized = False # Initial state
+
+    print("Attempting to load or train Anomaly Detector model...")
+    MODEL_PATH = os.path.join(app.instance_path, 'anomaly_detector_model.joblib')
+
+    # Try to load existing model
+    app.extensions['anomaly_detector'].load_model(MODEL_PATH)
+
+    if not app.extensions['anomaly_detector'].is_initialized:
+        # If model not loaded, train it
+        all_attacks = Attack.query.all()
+        
+        # Prepare features for training
+        if all_attacks:
+            features_list = []
+            for attack in all_attacks:
+                # Re-extract features using your extract_features function
+                # Ensure the data passed to extract_features matches its expected input structure
+                extracted = extract_features({
+                    'payload': attack.payload,
+                    'scanned_path': attack.scanned_path,
+                    'timestamp': attack.timestamp.isoformat() if attack.timestamp else None,
+                    'type': attack.type,
+                    'method': 'UNKNOWN' # Assuming method might not be directly in Attack model yet
+                })
+                # Order of features MUST match what you expect in the model
+                features_vector = [
+                    extracted['request_path_length'],
+                    extracted['http_method_encoded'],
+                    1 if extracted['is_sql_injection_pattern'] else 0,
+                    1 if extracted['is_xss_pattern'] else 0,
+                    1 if extracted['is_dir_trav_pattern'] else 0,
+                    extracted['hour_of_day'],
+                    extracted['day_of_week']
+                ]
+                features_list.append(features_vector)
+            
+            if features_list:
+                training_data = np.array(features_list)
+                app.extensions['anomaly_detector'].train(training_data)
+                
+                # Save the model after training
+                if app.extensions['anomaly_detector'].is_initialized:
+                    app.extensions['anomaly_detector'].save_model(MODEL_PATH)
+            else:
+                print("No historical attack data available to train Anomaly Detector.")
+        else:
+            print("No historical attack data available to train Anomaly Detector.")
+
+    # --- RL Agent Initialization ---
+    # This will be for a later step, but ensuring the global instance is accessible.
+    if 'rl_agent' not in app.extensions:
+        app.extensions['rl_agent'] = rl_agent # Use the global instance
+
+# ==============================================================================
 # DATABASE MODELS & USER LOADER
 # ==============================================================================
 # Import models *after* the db object has been initialized with the app
-from models import User, Attack, Honeypot
+
 
 # This function tells Flask-Login how to load a user from the user_id stored in the session
 @login_manager.user_loader
 def load_user(user_id):
     return User.query.get(int(user_id))
-
-
-# Create database tables within an application context (for initial setup)
-# This block should be at the GLOBAL SCOPE (no indentation)
-with app.app_context(): # <--- This line should have NO INDENTATION
-    # db.create_all() # Commented out, migrations will handle schema creation
-    print(f"DEBUG: Flask app is connecting to database: {app.config['SQLALCHEMY_DATABASE_URI']}")
-    pass
 
 # ==============================================================================
 # GEO-LOCATION & THREAT INTELLIGENCE FUNCTIONS
@@ -270,76 +497,7 @@ def get_geolocation_data(ip_address):
 
 # ... (existing imports, app setup, db setup, etc.) ...
 
-# ==============================================================================
-# ML FEATURE EXTRACTION HELPERS
-# ==============================================================================
 
-def extract_features(attack_data):
-    """
-    Extracts defined features from attack data.
-    """
-    payload = attack_data.get('payload', '')
-    scanned_path = attack_data.get('scanned_path', '')
-    timestamp_input = attack_data.get('timestamp') # Get the timestamp input, can be None or string
-    
-    dt_object = None
-    if isinstance(timestamp_input, str):
-        try:
-            # Try to parse the string timestamp
-            dt_object = datetime.fromisoformat(timestamp_input.replace('Z', '+00:00')) # Handle 'Z' for UTC
-        except ValueError:
-            # Fallback to current UTC time if string is invalid ISO format
-            dt_object = datetime.utcnow()
-    elif timestamp_input is None:
-        # If timestamp is not provided, use current UTC time
-        dt_object = datetime.utcnow()
-    else:
-        # If it's not a string and not None, assume it's already a datetime object or fall back
-        # For simplicity, we'll just use current UTC time as a fallback for unexpected types
-        dt_object = datetime.utcnow()
-
-    # Ensure dt_object is not None before proceeding
-    if dt_object is None:
-        # This case should ideally not happen with the above logic, but as a safeguard
-        dt_object = datetime.utcnow()
-
-    # Feature 1: request_path_length
-    full_request_content = f"{scanned_path} {payload}"
-    request_path_length = len(full_request_content.strip()) if full_request_content.strip() else 0
-
-    # Feature 2: http_method_encoded
-    http_method_map = {'GET': 0, 'POST': 1, 'PUT': 2, 'DELETE': 3, 'HEAD': 4, 'OPTIONS': 5, 'UNKNOWN': -1}
-    http_method_encoded = http_method_map.get(attack_data.get('method', 'UNKNOWN').upper(), -1)
-
-    # Feature 3, 4, 5: Pattern matching for common attack types
-    content_to_scan = (payload if isinstance(payload, str) else json.dumps(payload) if payload else "") + " " + (scanned_path if scanned_path else "")
-    content_to_scan = content_to_scan.lower()
-
-    is_sql_injection_pattern = bool(
-        re.search(r"select.*from|union.*select|' or '1'='1|--|#|cast\(|convert\(", content_to_scan)
-    )
-    is_xss_pattern = bool(
-        re.search(r"<script>|alert\(|onerror|onload|javascript:|eval\(", content_to_scan)
-    )
-    is_dir_trav_pattern = bool(
-        re.search(r"\.\./|\.\.\\|%2e%2e%2f|%2e%2e%5c", content_to_scan)
-    )
-
-    # Feature 6: hour_of_day
-    hour_of_day = dt_object.hour
-
-    # Feature 7: day_of_week (Monday=0, Sunday=6)
-    day_of_week = dt_object.weekday()
-
-    return {
-        'request_path_length': request_path_length,
-        'http_method_encoded': http_method_encoded,
-        'is_sql_injection_pattern': is_sql_injection_pattern,
-        'is_xss_pattern': is_xss_pattern,
-        'is_dir_trav_pattern': is_dir_trav_pattern,
-        'hour_of_day': hour_of_day,
-        'day_of_week': day_of_week,
-    }
 
 
         
@@ -433,85 +591,7 @@ HONEYPOT_TYPES = {
     "ftp": {"port": 21, "banner": "220 ProFTPD 1.3.5d Server (Debian)", "description": "Simulated FTP server"}
 }
 
-# ==============================================================================
-# REINFORCEMENT LEARNING AGENT (AI)
-# ==============================================================================
-class HoneypotRLAgent:
-    def __init__(self, state_size, action_size):
-        self.state_size = state_size
-        self.action_size = action_size
-        self.memory = deque(maxlen=2000)
-        self.gamma = 0.95
-        self.epsilon = 1.0
-        self.epsilon_decay = 0.995
-        self.epsilon_min = 0.01
-        self.learning_rate = 0.001
-        self.model = self._build_model()
 
-    def _build_model(self):
-        model = Sequential()
-        model.add(Dense(24, input_dim=self.state_size, activation='relu'))
-        model.add(Dense(24, activation='relu'))
-        model.add(Dense(self.action_size, activation='linear'))
-        model.compile(loss='mse', optimizer=Adam(learning_rate=self.learning_rate))
-        return model
-
-    def remember(self, state, action, reward, next_state, done):
-        self.memory.append((state, action, reward, next_state, done))
-
-    def act(self, state):
-        if np.random.rand() <= self.epsilon:
-            return random.randrange(self.action_size)
-        act_values = self.model.predict(state, verbose=0)
-        return np.argmax(act_values[0])
-
-    def replay(self, batch_size):
-        if len(self.memory) < batch_size:
-            return
-        minibatch = random.sample(self.memory, batch_size)
-        for state, action, reward, next_state, done in minibatch:
-            target = reward
-            if not done:
-                target = (reward + self.gamma * np.amax(self.model.predict(next_state, verbose=0)[0]))
-            target_f = self.model.predict(state, verbose=0)
-            target_f[0][action] = target
-            self.model.fit(state, target_f, epochs=1, verbose=0)
-        if self.epsilon > self.epsilon_min:
-            self.epsilon *= self.epsilon_decay
-
-    def save_model(self, path):
-        self.model.save(path)
-
-    def load_model(self, path):
-        self.model = tf.keras.models.load_model(path)
-
-# ==============================================================================
-# ANOMALY DETECTION (AI)
-# ==============================================================================
-class AnomalyDetector:
-    def __init__(self):
-        self.model = None
-        self.threshold = 0.5
-
-    def train(self, data):
-        self.model = IsolationForest(random_state=42)
-        self.model.fit(data)
-
-    def predict(self, data):
-        if self.model:
-            scores = self.model.decision_function(data)
-            return scores < self.threshold
-        return np.array([False] * len(data))
-
-    def save_model(self, path):
-        joblib.dump(self.model, path)
-
-    def load_model(self, path):
-        self.model = joblib.load(path)
-
-# Global instances for AI models (initialized lazily)
-rl_agent = DQLAgent(state_size=9, action_size=3) #
-anomaly_detector = AnomalyDetector()
 
 # ==============================================================================
 # SOCKETIO EVENT HANDLERS
@@ -766,170 +846,197 @@ def test_post_route():
         return jsonify({"error": str(e)}), 400
 
 
-
 # ==============================================================================
 # ATTACK LOGGING ROUTE (Honeypot Interaction Point)
 # ==============================================================================
 
 @app.route('/log_attack', methods=['POST'])
 @limiter.limit("100 per minute") # Rate limit this endpoint
+# You need to uncomment or re-add the @api_key_required decorator if you want auth
+# @api_key_required
 def log_attack():
+    app.logger.info("Received attack log request.")
     data = request.get_json()
 
     # --- START OF CRITICAL CHECKS ---
-    # These checks must be at the top-level of the function
     if not isinstance(data, dict):
         print(f"DEBUG: log_attack received data of unexpected type: {type(data)}. Full data: {data}")
         return jsonify({"error": "Invalid JSON payload or unexpected data type. Expected a dictionary."}), 400
     
-    if not data: # This check is for an empty dictionary after validation
+    if not data:
+        app.logger.error("No JSON data received in log_attack request.")
         return jsonify({"error": "Empty JSON payload provided"}), 400
     # --- END OF CRITICAL CHECKS ---
-
-    # Required fields for Attack model
+    
+    # Required fields for Attack model (and optional ones, using .get() with defaults)
     ip_address = data.get('ip_address') or request.remote_addr # Use provided or remote IP
     attack_type = data.get('type')
     payload = data.get('payload')
     honeypot_name = data.get('honeypot_name')
     honeypot_type = data.get('honeypot_type')
     api_key = data.get('api_key')
-    timestamp = data.get('timestamp') # Expecting ISO format string
+    timestamp_str = data.get('timestamp') # Renamed to avoid conflict with datetime object
     user_agent = data.get('user_agent')
-    scanned_path = data.get('scanned_path')
-    method = data.get('method', 'UNKNOWN') # Assuming method might come from payload now
+    scanned_path = data.get('scanned_path', '/')
+    method = data.get('method', 'UNKNOWN')
+
+    # Convert timestamp string to datetime object
+    timestamp_obj = datetime.utcnow()
+    if isinstance(timestamp_str, str):
+        try:
+            timestamp_obj = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+        except ValueError:
+            app.logger.warning(f"Invalid timestamp format received: {timestamp_str}. Using current UTC time.")
 
     if not all([attack_type, payload, honeypot_name, honeypot_type, api_key]):
+        app.logger.error(f"Missing required fields: type={attack_type}, payload={payload}, honeypot_name={honeypot_name}, honeypot_type={honeypot_type}, api_key={api_key}")
         return jsonify({"error": "Missing required attack data fields"}), 400
 
     # --- API Key Authentication ---
+    # Moved to an earlier, dedicated decorator @api_key_required (if you uncomment it above)
+    # If not using the decorator, keep this block here:
     expected_api_key = current_app.config['HONEYPOT_API_KEYS'].get(honeypot_name)
     if not expected_api_key or expected_api_key != api_key:
-        print(f"DEBUG: Unauthorized access attempt to {honeypot_name} with key {api_key}")
+        app.logger.warning(f"Unauthorized access attempt to {honeypot_name} with key {api_key}. Expected: {expected_api_key}")
         return jsonify({"error": "Unauthorized honeypot access"}), 401
 
     # --- Geolocation and IP Reputation ---
-    # get_geolocation_data now returns a tuple (country, city, lat, lon)
     country, city, latitude, longitude = get_geolocation_data(ip_address)
-    geolocation_data = {
-        'country': country,
-        'city': city,
-        'latitude': latitude,
-        'longitude': longitude
-    }
-    ip_reputation_data = check_ip_reputation(ip_address)
-    
-    # Check for honeypot_id (This part assumes a Honeypot model exists and is related)
+    ip_reputation_data = check_ip_reputation(ip_address) # This returns a dict or None
+
+    # --- Honeypot Instance Management ---
     honeypot_instance = Honeypot.query.filter_by(name=honeypot_name).first()
     honeypot_id = None
     if honeypot_instance:
         honeypot_id = honeypot_instance.id
     else:
-        # If honeypot doesn't exist, create it (example from previous logic)
         new_honeypot = Honeypot(name=honeypot_name, honeypot_type=honeypot_type, api_key=api_key)
         db.session.add(new_honeypot)
-        db.session.commit()
+        db.session.commit() # Commit new honeypot immediately to get its ID
         honeypot_id = new_honeypot.id
-        print(f"DEBUG: Created new honeypot instance: {honeypot_name}")
-
+        app.logger.info(f"Created new honeypot instance: {honeypot_name}")
 
     # --- ML Feature Extraction ---
-    # Prepare data for feature extraction using the `data` from the request
     features = extract_features({
         'payload': payload,
         'scanned_path': scanned_path,
-        'timestamp': timestamp,
+        'timestamp': timestamp_obj.isoformat(), # Pass datetime obj as ISO string
         'type': attack_type,
         'method': method
     })
 
-    # --- Threat Detection and Action Logic ---
+    # Convert features dictionary to a list/array in the correct order for prediction
+    # This order MUST match the order used during training in app.app_context()
+    feature_vector_for_prediction = np.array([[
+        features['request_path_length'],
+        features['http_method_encoded'],
+        1 if features['is_sql_injection_pattern'] else 0,
+        1 if features['is_xss_pattern'] else 0,
+        1 if features['is_dir_trav_pattern'] else 0,
+        features['hour_of_day'],
+        features['day_of_week']
+    ]])
+    
+    # --- Anomaly Detection and Threat Level Assignment ---
     action_taken = "log_only"
-    threat_level = "low"
-    is_threat = False
-    is_anomaly = False # Placeholder for anomaly detection
+    threat_level = "low" # Default threat level
+    is_anomaly = False # Default to False
+    is_threat = False # Default to False (for known signature threats)
 
-    # Initial simple AI/ML prediction (placeholder for now)
-    if attack_type in ["SQL Injection", "XSS", "Directory Traversal", "Malware Upload"]:
+    # 1. Check for known signature-based threats
+    if attack_type in ["SQL Injection", "XSS Attack", "Directory Traversal", "Malware Upload", "Port Scan", "SSH Brute Force"]:
         is_threat = True
-        threat_level = "high"
-        
-        # Anomaly Detection Placeholder (requires numpy imported and IsolationForest setup)
-        # Assuming app.extensions['anomaly_detector'] is initialized
-        if 'anomaly_detector' in current_app.extensions and current_app.extensions['anomaly_detector'].is_initialized:
-            # Create a 2D array for the single sample
-            dummy_features_for_anomaly = np.array([
-                features['request_path_length'],
-                features['http_method_encoded'],
-                1 if features['is_sql_injection_pattern'] else 0, # Convert bool to int
-                1 if features['is_xss_pattern'] else 0,          # Convert bool to int
-                1 if features['is_dir_trav_pattern'] else 0,     # Convert bool to int
-                features['hour_of_day'],
-                features['day_of_week']
-            ]).reshape(1, -1) # Reshape for a single sample with multiple features
-            
-            # Predict using the anomaly detector
-            is_anomaly = current_app.extensions['anomaly_detector'].predict(dummy_features_for_anomaly)[0] == -1 # IsolationForest returns -1 for anomaly, 1 for normal
+        threat_level = "high" # Initial high based on type
+
+    # 2. Anomaly Detection
+    anomaly_detector_instance = current_app.extensions.get('anomaly_detector')
+    if anomaly_detector_instance and anomaly_detector_instance.is_initialized:
+        try:
+            # IsolationForest's decision_function returns positive for normal, negative for anomalous
+            prediction_scores = anomaly_detector_instance.model.decision_function(feature_vector_for_prediction)
+            anomaly_score = prediction_scores[0]
+            # is_anomaly is True if score is below the threshold (more negative)
+            is_anomaly = anomaly_score < anomaly_detector_instance.threshold 
+
+            app.logger.info(f"Anomaly detection for IP {ip_address} (Type: {attack_type}): "
+                            f"Score: {anomaly_score:.4f}, Is Anomaly: {is_anomaly}")
 
             if is_anomaly:
-                print(f"DEBUG: Anomaly detected for IP: {ip_address}")
-                action_taken = "trigger_alert"
-                threat_level = "critical"
-            else:
-                action_taken = "log_only"
-                threat_level = "medium"
-        else:
-            action_taken = "log_only"
-            threat_level = "medium"
+                # If it's an anomaly, escalate threat level if not already critical
+                if threat_level != "critical": # Prevent downgrading from manual block etc.
+                    threat_level = "critical"
+                action_taken = "trigger_alert" # Default action for anomaly
+                app.logger.warning(f"ANOMALY ALERT: {attack_type} from {ip_address} detected as anomalous.")
 
-    # --- IP Blocking Logic ---
+        except Exception as e:
+            app.logger.error(f"Error during anomaly detection prediction for {ip_address}: {e}")
+            # If anomaly detection fails, threat_level remains based on type or "medium"
+            is_anomaly = False # Assume not anomaly if error
+    else:
+        app.logger.warning("Anomaly Detector not initialized or not found. Skipping prediction for this attack.")
+        # threat_level remains based on 'is_threat' or "low" if not already set.
+
+    # 3. IP Blocking Logic (This should potentially override other actions)
     if is_ip_blocked(ip_address):
-        print(f"DEBUG: Attack from known blocked IP: {ip_address}. Logging only.")
+        app.logger.info(f"Attack from known blocked IP: {ip_address}. Setting action to 'block_ip'.")
         action_taken = "block_ip"
-        threat_level = "critical"
+        threat_level = "critical" # Blocked IPs are always critical threats
 
-
-    # Create new Attack entry with all new features
+    # --- Create new Attack entry with all new features ---
     new_attack = Attack(
         ip=ip_address,
         type=attack_type,
         payload=payload,
         user_agent=user_agent,
         scanned_path=scanned_path,
-        timestamp=datetime.fromisoformat(timestamp.replace('Z', '+00:00')) if isinstance(timestamp, str) else datetime.utcnow(),
-        latitude=geolocation_data.get('latitude'),
-        longitude=geolocation_data.get('longitude'),
-        country=geolocation_data.get('country'),
-        city=geolocation_data.get('city'),
+        timestamp=timestamp_obj, # Use the datetime object
+        latitude=latitude,
+        longitude=longitude,
+        country=country,
+        city=city,
         honeypot_id=honeypot_id,
-        is_threat=is_threat,
-        is_anomaly=is_anomaly,
-        threat_intel=ip_reputation_data,
-        # Assign new ML features
+        is_threat=is_threat,       # Based on attack_type signature
+        is_anomaly=is_anomaly,     # Based on ML model prediction
+        threat_intel=json.dumps(ip_reputation_data) if ip_reputation_data else None, # Store as JSON string
         request_path_length=features['request_path_length'],
         http_method_encoded=features['http_method_encoded'],
         is_sql_injection_pattern=features['is_sql_injection_pattern'],
         is_xss_pattern=features['is_xss_pattern'],
         is_dir_trav_pattern=features['is_dir_trav_pattern'],
         hour_of_day=features['hour_of_day'],
-        day_of_week=features['day_of_week']
+        day_of_week=features['day_of_week'],
+        # threat_level is determined by logic above
+        threat_level=threat_level
     )
+    
     db.session.add(new_attack)
-    db.session.commit()
+    try:
+        db.session.commit()
+        app.logger.info(f"Attack from {ip_address} (Type: {attack_type}, Anomaly: {is_anomaly}, Threat Level: {threat_level}) logged successfully.")
+    except Exception as e:
+        db.session.rollback()
+        app.logger.error(f"Failed to log attack for {ip_address}: {e}")
+        return jsonify({"status": "error", "message": "Failed to log attack"}), 500
 
     # Emit real-time update
     attack_data_for_feed = {
+        "id": new_attack.id, # Include ID for dashboard
         "ip_address": ip_address,
         "type": attack_type,
         "timestamp": new_attack.timestamp.isoformat(),
         "honeypot_name": honeypot_name,
         "threat_level": threat_level,
         "action_taken": action_taken,
-        "city": geolocation_data.get('city', 'N/A'),
-        "country": geolocation_data.get('country', 'N/A')
+        "city": city,
+        "country": country,
+        "is_anomaly": is_anomaly,
+        "payload": payload # Include payload for more context in dashboard feed if desired
     }
     socketio.emit('new_attack', attack_data_for_feed)
 
-    # Final response
+    # Final response to the honeypot
+    message = "Attack logged." # Default message
+
     if action_taken == "block_ip":
         message = "Attack source blocked due to AI analysis."
     elif action_taken == "trigger_alert":
@@ -939,12 +1046,14 @@ def log_attack():
     elif action_taken == "log_only":
         message = "Attack logged only."
     else:
-        message = "No action taken."
+        message = "No specific action taken."
 
     return jsonify({
         "status": "logged",
         "message": message,
-        "action_taken": action_taken
+        "action_taken": action_taken,
+        "is_anomaly": is_anomaly, # Include anomaly status in API response
+        "threat_level": threat_level # Include threat level in API response
     }), 200
 
 # ==============================================================================

@@ -58,41 +58,43 @@ class Honeypot(db.Model):
 
 # --- Attack Model (with geo-location fields and honeypot relationship) ---
 class Attack(db.Model):
-    __tablename__ = 'attacks' # Good practice to explicitly define tablename
+    __tablename__ = 'attacks'
 
     id = db.Column(db.Integer, primary_key=True)
-    ip = db.Column(db.String(45), nullable=False) # Supports IPv4 and IPv6
-    type = db.Column(db.String(50), nullable=False) # e.g., 'login_attempt', 'port_scan', 'sql_injection'
-    payload = db.Column(db.JSON, nullable=True) # Store payload as JSON
-    user_agent = db.Column(db.String(255), nullable=True)
-    timestamp = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
-    scanned_path = db.Column(db.String(255), nullable=True) # For web attacks
+    ip = db.Column(db.String(45), nullable=False)
+    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
+    type = db.Column(db.String(100), nullable=False)
+    payload = db.Column(db.Text)
+    user_agent = db.Column(db.String(255))
+    scanned_path = db.Column(db.String(255))
+    honeypot_name = db.Column(db.String(100)) # Consider making this nullable=False if always required
+    honeypot_type = db.Column(db.String(50)) # Consider making this nullable=False if always required
 
-    # NEW FIELDS for Geo-location (Phase 1, Component 2)
+    # Geo-location fields
     latitude = db.Column(db.Float, nullable=True)
     longitude = db.Column(db.Float, nullable=True)
     country = db.Column(db.String(100), nullable=True)
     city = db.Column(db.String(100), nullable=True)
 
     # Foreign Key to link to the Honeypot model
-    honeypot_id = db.Column(db.Integer, db.ForeignKey('honeypots.id'), nullable=True)
-    # Define the relationship to the Honeypot model
-    honeypot = db.relationship('Honeypot', back_populates='attacks')
+    honeypot_id = db.Column(db.Integer, db.ForeignKey('honeypots.id'), nullable=True) # Keep this one
+    # Define the relationship to the Honeypot model (use back_populates for consistency)
+    honeypot = db.relationship('Honeypot', back_populates='attacks') # Keep this one
 
-    is_threat = db.Column(db.Boolean, nullable=False, server_default='0') # Set server_default
-    is_anomaly = db.Column(db.Boolean, nullable=False, server_default='0') # Set server_default
-    threat_intel = db.Column(db.JSON, nullable=True) # <--- ADD THIS LINE HERE
+    # Threat Intelligence & ML derived fields
+    is_threat = db.Column(db.Boolean, nullable=False, server_default='0')
+    is_anomaly = db.Column(db.Boolean, nullable=False, server_default='0')
+    threat_level = db.Column(db.String(50), default="low")
+    threat_intel = db.Column(db.JSON, nullable=True) # Store reputation data as JSON (or Text for SQLite)
 
-     # --- ADD THESE NEW COLUMNS FOR ML FEATURE EXTRACTION ---
+    # ML Feature Extraction fields
     request_path_length = db.Column(db.Integer, nullable=True)
-    http_method_encoded = db.Column(db.Integer, nullable=True) # e.g., 0 for GET, 1 for POST
+    http_method_encoded = db.Column(db.Integer, nullable=True)
     is_sql_injection_pattern = db.Column(db.Boolean, default=False, nullable=True)
     is_xss_pattern = db.Column(db.Boolean, default=False, nullable=True)
     is_dir_trav_pattern = db.Column(db.Boolean, default=False, nullable=True)
     hour_of_day = db.Column(db.Integer, nullable=True)
     day_of_week = db.Column(db.Integer, nullable=True)
-    # --- END OF NEW COLUMNS ---
-
 
     def __repr__(self):
         return f'<Attack from {self.ip} at {self.timestamp}>'
