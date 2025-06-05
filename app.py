@@ -1020,7 +1020,7 @@ def log_attack():
 
     # Emit real-time update
     attack_data_for_feed = {
-        "id": new_attack.id, # Include ID for dashboard
+        "id": int(new_attack.id), # Include ID for dashboard
         "ip_address": ip_address,
         "type": attack_type,
         "timestamp": new_attack.timestamp.isoformat(),
@@ -1029,7 +1029,8 @@ def log_attack():
         "action_taken": action_taken,
         "city": city,
         "country": country,
-        "is_anomaly": is_anomaly,
+        "is_anomaly": bool(new_attack.is_anomaly), # Already added this, ensuring it's a Python bool
+        "is_threat": bool(new_attack.is_threat),   # <--- ADD THIS LINE
         "payload": payload # Include payload for more context in dashboard feed if desired
     }
     socketio.emit('new_attack', attack_data_for_feed)
@@ -1052,8 +1053,8 @@ def log_attack():
         "status": "logged",
         "message": message,
         "action_taken": action_taken,
-        "is_anomaly": is_anomaly, # Include anomaly status in API response
-        "threat_level": threat_level # Include threat level in API response
+        "is_anomaly": bool(is_anomaly),   # <--- CHANGE THIS LINE
+        "threat_level": threat_level
     }), 200
 
 # ==============================================================================
